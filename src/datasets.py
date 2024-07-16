@@ -22,6 +22,25 @@ from src.utils import RepresentationType, VoxelGrid, flow_16bit_to_float
 
 VISU_INDEX = 1
 
+class EventDataAugmentation:
+    def __init__(self, flip_probability=0.5, rotation_max_angle=10):
+        self.flip_probability = flip_probability
+        self.rotation_max_angle = rotation_max_angle
+
+    def __call__(self, event_volume):
+        # Horizontal flip
+        if np.random.random() < self.flip_probability:
+            event_volume = torch.flip(event_volume, [2])
+
+        # Random rotation
+        angle = np.random.uniform(-self.rotation_max_angle, self.rotation_max_angle)
+        event_volume = tf.functional.rotate(event_volume, angle, interpolation=tf.InterpolationMode.NEAREST)
+
+        # Time reversal
+        if np.random.random() < 0.5:
+            event_volume = torch.flip(event_volume, [0])
+
+        return event_volume
 
 class EventSlicer:
     def __init__(self, h5f: h5py.File):
@@ -176,7 +195,7 @@ class EventSlicer:
 
 class Sequence(Dataset):
     def __init__(self, seq_path: Path, representation_type: RepresentationType, mode: str = 'test', delta_t_ms: int = 100,
-                 num_bins: int = 4, transforms=[], name_idx=0, visualize=False, load_gt=False):
+                 num_bins: int = 4, transforms=[], name_idx=0, visualize=False, load_gt=False, apply_augmentation=True):
         assert num_bins >= 1
         assert delta_t_ms == 100
         assert seq_path.is_dir()
@@ -260,6 +279,8 @@ class Sequence(Dataset):
         h5f_location = h5py.File(str(ev_data_file), 'r')
         self.h5f = h5f_location
         self.event_slicer = EventSlicer(h5f_location)
+        
+        self.event_augmentation = EventDataAugmentation() if mode == 'train' and apply_augmentation else None
 
         self.h5rect = h5py.File(str(ev_rect_file), 'r')
         self.rectify_ev_map = self.h5rect['rectify_map'][()]
@@ -361,6 +382,10 @@ class Sequence(Dataset):
 
     def __getitem__(self, idx):
         sample = self.get_data(idx)
+        
+        if self.event_augmentation is not None:
+            sample['event_volume'] = self.event_augmentation(sample['event_volume'])
+        
         return sample
 
     def get_voxel_grid(self, idx):
@@ -528,7 +553,7 @@ class SequenceRecurrent(Sequence):
 
 class DatasetProvider:
     def __init__(self, dataset_path: Path, representation_type: RepresentationType, delta_t_ms: int = 100, num_bins=4,
-                config=None, visualize=False):
+                 config=None, visualize=False, apply_augmentation=True):  # apply_augmentation パラメータを追加
         test_path = Path(os.path.join(dataset_path, 'test'))
         train_path = Path(os.path.join(dataset_path, 'train'))
         assert dataset_path.is_dir(), str(dataset_path)
@@ -542,10 +567,10 @@ class DatasetProvider:
         for child in test_path.iterdir():
             self.name_mapper_test.append(str(child).split("/")[-1])
             test_sequences.append(Sequence(child, representation_type, 'test', delta_t_ms, num_bins,
-                                               transforms=[],
-                                               name_idx=len(
-                                                   self.name_mapper_test)-1,
-                                               visualize=visualize))
+                                           transforms=[],
+                                           name_idx=len(self.name_mapper_test)-1,
+                                           visualize=visualize,
+                                           apply_augmentation=False))  # テストデータには拡張を適用しない
 
         self.test_dataset = torch.utils.data.ConcatDataset(test_sequences)
 
@@ -556,11 +581,10 @@ class DatasetProvider:
 
         train_sequences: list[Sequence] = []
         for seq in seqs:
-            extra_arg = dict()
             train_sequences.append(Sequence(Path(train_path) / seq,
                                    representation_type=representation_type, mode="train",
-                                   load_gt=True, **extra_arg))
-            self.train_dataset: torch.utils.data.ConcatDataset[Sequence] = torch.utils.data.ConcatDataset(train_sequences)
+                                   load_gt=True, apply_augmentation=apply_augmentation))  # トレーニングデータに拡張を適用
+        self.train_dataset: torch.utils.data.ConcatDataset[Sequence] = torch.utils.data.ConcatDataset(train_sequences)
 
     def get_test_dataset(self):
         return self.test_dataset

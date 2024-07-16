@@ -78,21 +78,22 @@ def main(args: DictConfig):
         dataset_path=Path(args.dataset_path),
         representation_type=RepresentationType.VOXEL,
         delta_t_ms=100,
-        num_bins=4
+        num_bins=4,
+        apply_augmentation=True  # データ拡張を有効にする
     )
     train_set = loader.get_train_dataset()
     test_set = loader.get_test_dataset()
     collate_fn = train_collate
     train_data = DataLoader(train_set,
-                                 batch_size=args.data_loader.train.batch_size,
-                                 shuffle=args.data_loader.train.shuffle,
-                                 collate_fn=collate_fn,
-                                 drop_last=False)
+                            batch_size=args.data_loader.train.batch_size // 2,  # バッチサイズを半分に
+                            shuffle=args.data_loader.train.shuffle,
+                            collate_fn=collate_fn,
+                            drop_last=False)
     test_data = DataLoader(test_set,
-                                 batch_size=args.data_loader.test.batch_size,
-                                 shuffle=args.data_loader.test.shuffle,
-                                 collate_fn=collate_fn,
-                                 drop_last=False)
+                                batch_size=args.data_loader.test.batch_size,
+                                shuffle=args.data_loader.test.shuffle,
+                                collate_fn=collate_fn,
+                                drop_last=False)
 
     '''
     train data:
@@ -156,14 +157,14 @@ def main(args: DictConfig):
         print("start test")
         for batch in tqdm(test_data):
             batch: Dict[str, Any]
-            event_image = batch["event_volume_old"].to(device)
+            event_image = batch["event_volume"].to(device)
             batch_flow = model(event_image) # [1, 2, 480, 640]
             flow = torch.cat((flow, batch_flow), dim=0)  # [N, 2, 480, 640]
         print("test done")
     # ------------------
     #  save submission
     # ------------------
-    file_name = "submission.npy"
+    file_name = "submission"
     save_optical_flow_to_npy(flow, file_name)
 
 if __name__ == "__main__":
